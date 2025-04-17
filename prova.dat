@@ -1,0 +1,5 @@
+set I := R P S;
+param U: R P S :=
+R 0 -1 1
+P 1 0 -1
+S -1 1 0;
