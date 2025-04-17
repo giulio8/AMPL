@@ -3,17 +3,12 @@ from itertools import product
 from dotenv import load_dotenv
 from amplpy import AMPL
 
-# Carica le variabili dal file .env
+# Setup ambiente
 load_dotenv()
-
-folder_path = "nash_equilibrium"                        
-
+folder_path = "stackelberg/bayesian"
 ampl_path = os.getenv("AMPL_PATH")
-if ampl_path is None:
-    raise ValueError("Please set the AMPL_PATH environment variable in your .env file.")
-
 model_file = os.path.join(ampl_path, folder_path, "model.mod")
-data_file = os.path.join(ampl_path, folder_path, "data.dat")
+data_file = os.path.join(ampl_path, folder_path, "data-example.dat")
 
 # Inizializza AMPL
 ampl = AMPL()
@@ -21,53 +16,52 @@ ampl.option["solver"] = "gurobi"
 ampl.read(model_file)
 ampl.readData(data_file)
 
-# Recupera insiemi A e T
-A = list(ampl.getSet("A").getValues())
-T = list(ampl.getSet("T").getValues())
+# Estrai insiemi
+A = [a[0] for a in ampl.getSet("A").getValues()]
+T = [t[0] for t in ampl.getSet("T").getValues()]
 
-# Genera tutte le combinazioni possibili di AF[t]
-# Ogni AF è un dizionario tipo: {"type1": 1, "type2": 3}
-action_profiles = list(product(A, repeat=len(T)))
+# Genera tutti i profili possibili di AF[t] ∈ A^|T|
+profiles = list(product(A, repeat=len(T)))
 
-print(f"🔄 Risoluzione di {len(action_profiles)} sottoproblemi...\n")
+print(f"\n🔄 Risoluzione di {len(profiles)} profili bayesiani AF[t]...\n")
 
 best_obj = float("-inf")
 best_AF = None
 best_strategy = {}
 
-# Itera su ogni possibile profilo AF
-for profile in action_profiles:
-    # Costruisci dizionario AF
-    AF_dict = {t: a for t, a in zip(T, profile)}
+for prof in profiles:
+    current_AF = dict(zip(T, prof))
+    for t, af in current_AF.items():
+        ampl.getParameter("AF")[t] = af
 
-    # Imposta AF in AMPL
-    for t, a in AF_dict.items():
-        ampl.getParameter("AF")[t] = a
-
-    # Risolvi
     ampl.solve()
+    obj = ampl.getObjective("obj").value()
+    strategy = {a: ampl.getVariable("sL")[a].value() for a in A}
+    total = sum(strategy.values())
 
-    # Recupera l'obiettivo e strategia ottima
-    obj_value = ampl.getObjective("obj").value()
-    strategy = {int(al): ampl.getVariable("sL")[al].value() for al in A}
+    # Filtro a posteriori: strategia valida?
+    if any(val < -1e-6 for val in strategy.values()):
+        continue  # scarta strategia con valori negativi
 
-    # Stampa i risultati
-    print(f"AF: {AF_dict} ➜ Obj = {obj_value:.4f}")
-    print("   Strategia leader:")
-    for al, val in strategy.items():
-        print(f"     azione {al}: {val:.4f}")
+    if abs(total - 1.0) > 1e-4:
+        continue  # scarta strategia che non somma a 1
+
+    print(f"🔸 AF = {current_AF} ➜ Obj = {obj:.4f}")
+    for a, val in strategy.items():
+        print(f"   sL({a}) = {val:.4f}")
     print()
 
-    # Salva se è la migliore
-    if obj_value > best_obj:
-        best_obj = obj_value
-        best_AF = AF_dict.copy()
+    if obj > best_obj:
+        best_obj = obj
+        best_AF = current_AF.copy()
         best_strategy = strategy.copy()
 
-# Stampa la migliore
-print("✅ Migliore profilo trovato:")
-print(f"   AF: {best_AF}")
-print(f"   Obj = {best_obj:.4f}")
-print("   Strategia ottima leader:")
-for al, val in best_strategy.items():
-    print(f"     azione {al}: {val:.4f}")
+# Risultato finale
+if best_AF:
+    print("✅ Migliore strategia valida trovata:")
+    print(f"   AF = {best_AF}")
+    print(f"   Obiettivo massimo = {best_obj:.4f}")
+    for a, val in best_strategy.items():
+        print(f"   sL({a}) = {val:.4f}")
+else:
+    print("❌ Nessun profilo AF ha prodotto una soluzione valida.")
